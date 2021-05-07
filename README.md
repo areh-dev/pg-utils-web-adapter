@@ -7,7 +7,7 @@ and `restore` functions from main application container to include database back
 
 ## Storage
 
-All files for backup and restore should be located in `/backup` directory. You should pass stateful volume to this path
+All files for backup and restore should be located in `/backups` directory. You should pass stateful volume to this path
 
 ## Environment variables
 
