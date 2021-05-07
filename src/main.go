@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -218,7 +219,9 @@ func executeWithOutput(app string, args []string, printOutput bool, omitSuccessf
 	}
 
 	if printOutput {
-		fmt.Printf("[INFO] External app output\n%v\n", string(out))
+		outputOffset := "\n       --> "
+		formattedOutput := outputOffset + strings.ReplaceAll(strings.TrimSpace(string(out)), "\n", outputOffset)
+		fmt.Printf("[INFO] External app output:%v\n", formattedOutput)
 	}
 
 	if omitSuccessfulOutputMessage {
