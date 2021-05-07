@@ -207,7 +207,7 @@ func executeWithOutput(app string, args []string, printOutput bool, omitSuccessf
 	cmd := exec.Command(app, args...)
 
 	if pgEnvSet != nil && pgEnvSet.Pass != "" {
-		cmd.Env = []string{"PGPASSWORD=" + pgEnvSet.Pass}
+		cmd.Env = append(os.Environ(), "PGPASSWORD="+pgEnvSet.Pass)
 	}
 
 	out, err := cmd.CombinedOutput()
