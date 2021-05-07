@@ -117,11 +117,13 @@ func backupHandler(w http.ResponseWriter, r *http.Request) {
 		"-p", pgEnvSet.Port,
 		"-U", pgEnvSet.User,
 		"-Fc",
+		"-w",
+		"-v",
 		pgEnvSet.Db,
 		"-f", fileName,
 	}
 
-	returnExecutionResult(w, "backup", pgDump, args, fileName)
+	returnExecutionResult(w, "backup", pgDump, args, true, fileName)
 }
 
 func backupFullHandler(w http.ResponseWriter, r *http.Request) {
@@ -130,11 +132,11 @@ func backupFullHandler(w http.ResponseWriter, r *http.Request) {
 	// do backup
 
 	args := []string{
-		"ya.ru",
-		"-c", "3",
+		"google.com",
+		"-c", "2",
 	}
 
-	returnExecutionResult(w, "backupFull", "pingTest", args, "")
+	returnExecutionResult(w, "backupFull", "ping", args, false, "")
 }
 
 func restoreHandler(w http.ResponseWriter, r *http.Request) {
@@ -158,21 +160,24 @@ func restoreFullHandler(w http.ResponseWriter, r *http.Request) {
 
 	args := []string{
 		"ya.ru",
-		"-c", "3",
+		"-c", "2",
 	}
 
-	returnExecutionResult(w, "restoreFull", "ping", args, "")
+	returnExecutionResult(w, "restoreFull", "ping", args, false, "")
 }
 
-func returnExecutionResult(w http.ResponseWriter, actionName, app string, args []string, fileName string) {
+func returnExecutionResult(w http.ResponseWriter, actionName, app string, args []string, omitSuccessfulOutput bool, fileName string) {
 	status := statusError
 	httpStatus := http.StatusInternalServerError
 	resultFile := ""
-	res, out := executeWithOutput(app, args, true)
+
+	res, out := executeWithOutput(app, args, true, omitSuccessfulOutput)
 	if res {
 		status = statusOk
 		httpStatus = http.StatusOK
 		resultFile = fileName
+	} else if fileName != "" {
+		_ = os.Remove(fileName)
 	}
 
 	writeResponse(w, httpStatus, actionResponse{Action: actionName, Status: status, Message: out, File: resultFile})
@@ -194,25 +199,30 @@ func checkPgUtils() bool {
 }
 
 func execute(app string, args []string) bool {
-	res, _ := executeWithOutput(app, args, false)
+	res, _ := executeWithOutput(app, args, false, true)
 	return res
 }
 
-func executeWithOutput(app string, args []string, printOutput bool) (bool, string) {
+func executeWithOutput(app string, args []string, printOutput bool, omitSuccessfulOutputMessage bool) (bool, string) {
 	cmd := exec.Command(app, args...)
 
-	if pgEnvSet.Pass != "" {
+	if pgEnvSet != nil && pgEnvSet.Pass != "" {
 		cmd.Env = []string{"PGPASSWORD=" + pgEnvSet.Pass}
 	}
 
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Printf("[ERR] Can't execute app %v, error:\n%v", app, err.Error())
-		return false, err.Error()
+		errMessage := fmt.Sprintf("Can't execute app %v, error: %v\nOutput:\n%v", app, err.Error(), string(out))
+		fmt.Println("[ERR] " + errMessage)
+		return false, errMessage
 	}
 
 	if printOutput {
 		fmt.Printf("[INFO] External app output\n%v\n", string(out))
+	}
+
+	if omitSuccessfulOutputMessage {
+		return true, ""
 	}
 
 	return true, string(out)
