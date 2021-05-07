@@ -1,0 +1,1 @@
+module "pg-utils-web-adapter"
