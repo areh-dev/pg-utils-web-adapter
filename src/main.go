@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -11,16 +13,22 @@ import (
 	"time"
 )
 
-// External utils
+// Required external utils
 const (
+	pSql       = "psql"
 	pgDump     = "pg_dump"
 	pgRestore  = "pg_restore"
 	pgCreateDb = "createdb"
 )
 
-// Message
+// Messages
 const (
-	messageEnvNotSet = "environment variables not set"
+	messageEnvNotSet          = "Environment variables not set"
+	messageMethodNotSupported = "Unsupported HTTP method"
+	messageNotSufficientData  = "POST data doesn't have sufficient data"
+	messageIoError            = "Unknown IO error"
+	messageBackupFileNotFound = "Backup file not found"
+	messageFileNameNotSet     = "File name doesn't set by request URL"
 )
 
 // Status values
@@ -29,6 +37,15 @@ const (
 	statusError   = "error"
 	statusSkipped = "skipped"
 )
+
+type malformedRequest struct {
+	status  int
+	message string
+}
+
+func (mr *malformedRequest) Error() string {
+	return mr.message
+}
 
 type actionResponse struct {
 	Status  string `json:"status"`
@@ -46,6 +63,7 @@ type pgConnection struct {
 }
 
 var pgEnvSet *pgConnection
+var useDirStructure bool
 
 func main() {
 	if !checkPgUtils() {
@@ -54,14 +72,13 @@ func main() {
 	}
 
 	pgEnvSet = loadEnvSettings()
+	useDirStructure = strings.ToUpper(getEnvVariableWithDefault("USE_DIR_STRUCTURE", "")) == "TRUE"
 
 	log.Printf("[INFO] PostgreSQL connection settings set in environment variables: %v\n", pgEnvSet != nil)
 
 	http.HandleFunc("/status", statusHandler)
 	http.HandleFunc("/backup", backupHandler)
-	http.HandleFunc("/backup-db", backupFullHandler)
 	http.HandleFunc("/restore", restoreHandler)
-	http.HandleFunc("/restore-db", restoreFullHandler)
 
 	log.Println("[INFO] Listening port 80")
 	err := http.ListenAndServe(":80", nil)
@@ -102,77 +119,122 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func backupHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[INFO] Request URI: %s, handler: %s", r.RequestURI, "backupHandler")
-
-	if pgEnvSet == nil {
-		writeResponse(w, http.StatusNotImplemented,
-			actionResponse{Action: "backup", Status: statusError, Message: messageEnvNotSet})
+	log.Printf("[INFO] Request [%s] URI: %s, handler: %s", r.Method, r.RequestURI, "backupHandler")
+	actionName := "backup"
+	pgConnection, badHttpRequest := GetConnectionConfig(w, r, actionName)
+	if badHttpRequest {
 		return
 	}
 
-	// do default backup
-	fileName := fmt.Sprintf("/backups/%s_%s_%s.dump", pgEnvSet.Host, pgEnvSet.Db, time.Now().Format("20060102_150405"))
+	var fileName string
+	if useDirStructure {
+		path := fmt.Sprintf("/backups/%s/%s", pgConnection.Host, pgConnection.Db)
+		err := os.MkdirAll(path, 0666)
+		if err != nil {
+			log.Printf("[ERR] Can't create directory: %s, Error: %s", path, err.Error())
+			writeResponse(w, http.StatusInternalServerError,
+				actionResponse{Action: actionName, Status: statusError, Message: messageIoError})
+		}
+
+		fileName = fmt.Sprintf("%s/%s.dump", path, time.Now().Format("20060102_150405"))
+	} else {
+		fileName = fmt.Sprintf("/backups/%s_%s_%s.dump", pgConnection.Host, pgConnection.Db, time.Now().Format("20060102_150405"))
+	}
 
 	args := []string{
-		"-h", pgEnvSet.Host,
-		"-p", pgEnvSet.Port,
-		"-U", pgEnvSet.User,
+		"-h", pgConnection.Host,
+		"-p", pgConnection.Port,
+		"-U", pgConnection.User,
 		"-Fc",
 		"-w",
 		"-v",
-		pgEnvSet.Db,
+		pgConnection.Db,
 		"-f", fileName,
 	}
 
-	returnExecutionResult(w, "backup", pgDump, args, true, fileName)
+	returnExecutionResult(w, actionName, pgDump, args, pgConnection.Pass, true, fileName)
 }
 
-func backupFullHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[INFO] Request URI: %s, handler: %s", r.RequestURI, "backupFullHandler")
+func GetConnectionConfig(w http.ResponseWriter, r *http.Request, actionName string) (*pgConnection, bool) {
+	var pgConnection pgConnection
 
-	// do backup
+	switch r.Method {
+	case http.MethodGet: // Use environment configuration
+		if pgEnvSet == nil {
+			writeResponse(w, http.StatusNotImplemented,
+				actionResponse{Action: actionName, Status: statusError, Message: messageEnvNotSet})
+			return nil, true
+		}
+		pgConnection = *pgEnvSet
 
-	args := []string{
-		"google.com",
-		"-c", "2",
+	case http.MethodPost: // Read configuration from post request
+		err := decodeJSONBody(w, r, &pgConnection)
+		if err != nil {
+			var mr *malformedRequest
+			if errors.As(err, &mr) {
+				writeResponse(w, mr.status, actionResponse{Action: actionName, Status: statusError, Message: mr.message})
+			} else {
+				log.Printf("[ERR] Can't parse malformedRequest: %s", err.Error())
+				writeResponse(w, http.StatusInternalServerError,
+					actionResponse{Action: actionName, Status: statusError, Message: http.StatusText(http.StatusInternalServerError)})
+			}
+			return nil, true
+		}
+
+		if checkSettings(&pgConnection) == nil {
+			writeResponse(w, http.StatusBadRequest, actionResponse{Action: actionName, Status: statusError, Message: messageNotSufficientData})
+			return nil, true
+		}
+
+	default: // Unsupported HTTP method
+		writeResponse(w, http.StatusMethodNotAllowed,
+			actionResponse{Action: actionName, Status: statusError, Message: messageMethodNotSupported})
+		return nil, true
 	}
 
-	returnExecutionResult(w, "backupFull", "ping", args, false, "")
+	return &pgConnection, false
 }
 
 func restoreHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[INFO] Request URI: %s, handler: %s", r.RequestURI, "restoreHandler")
+	actionName := "restore"
 
-	if pgEnvSet == nil {
-		writeResponse(w, http.StatusNotImplemented,
-			actionResponse{Action: "restore", Status: statusError, Message: messageEnvNotSet})
+	file := r.URL.Query().Get("file")
+	if file == "" {
+		writeResponse(w, http.StatusBadRequest, actionResponse{Action: actionName, Status: statusError, Message: messageFileNameNotSet})
 		return
 	}
 
-	// do default restore
-
-	writeResponse(w, http.StatusOK, actionResponse{Action: "restore", Status: statusSkipped})
-}
-
-func restoreFullHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[INFO] Request URI: %s, handler: %s", r.RequestURI, "restoreFullHandler")
-
-	// do restore
-
-	args := []string{
-		"ya.ru",
-		"-c", "2",
+	fileExist, err := fileExist(fmt.Sprintf("/backups/%s", strings.TrimLeft(file, "/.")))
+	if err != nil || !fileExist {
+		writeResponse(w, http.StatusBadRequest, actionResponse{Action: actionName, Status: statusError, Message: messageBackupFileNotFound})
+		return
 	}
 
-	returnExecutionResult(w, "restoreFull", "ping", args, false, "")
+	pgConnection, badHttpRequest := GetConnectionConfig(w, r, actionName)
+	if badHttpRequest {
+		return
+	}
+
+	// todo: next steps to restore:
+	/*
+		1. Check is DB exist
+		2. Clear \ Creat DB
+		3. Restore data from file
+	*/
+
+	//dbExist, err =
+	log.Println(pgConnection.Host)
+
+	writeResponse(w, http.StatusOK, actionResponse{Action: actionName, Status: statusSkipped})
 }
 
-func returnExecutionResult(w http.ResponseWriter, actionName, app string, args []string, omitSuccessfulOutput bool, fileName string) {
+func returnExecutionResult(w http.ResponseWriter, actionName, app string, args []string, pgPassword string, omitSuccessfulOutput bool, fileName string) {
 	status := statusError
 	httpStatus := http.StatusInternalServerError
 	resultFile := ""
 
-	res, out := executeWithOutput(app, args, true, omitSuccessfulOutput)
+	res, out := executeWithOutput(app, args, pgPassword, true, omitSuccessfulOutput)
 	if res {
 		status = statusOk
 		httpStatus = http.StatusOK
@@ -196,19 +258,22 @@ func writeResponse(w http.ResponseWriter, responseStatus int, responseData actio
 
 func checkPgUtils() bool {
 	args := []string{"--help"}
-	return execute(pgDump, args) && execute(pgRestore, args) && execute(pgCreateDb, args)
+	return execute(pSql, args, "") &&
+		execute(pgDump, args, "") &&
+		execute(pgRestore, args, "") &&
+		execute(pgCreateDb, args, "")
 }
 
-func execute(app string, args []string) bool {
-	res, _ := executeWithOutput(app, args, false, true)
+func execute(app string, args []string, pgPassword string) bool {
+	res, _ := executeWithOutput(app, args, pgPassword, false, true)
 	return res
 }
 
-func executeWithOutput(app string, args []string, printOutput bool, omitSuccessfulOutputMessage bool) (bool, string) {
+func executeWithOutput(app string, args []string, pgPassword string, printOutput bool, omitSuccessfulOutputMessage bool) (bool, string) {
 	cmd := exec.Command(app, args...)
 
-	if pgEnvSet != nil && pgEnvSet.Pass != "" {
-		cmd.Env = append(os.Environ(), "PGPASSWORD="+pgEnvSet.Pass)
+	if pgPassword != "" {
+		cmd.Env = append(os.Environ(), "PGPASSWORD="+pgPassword)
 	}
 
 	out, err := cmd.CombinedOutput()
@@ -229,4 +294,59 @@ func executeWithOutput(app string, args []string, printOutput bool, omitSuccessf
 	}
 
 	return true, string(out)
+}
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst interface{}) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+
+	dec := json.NewDecoder(r.Body)
+	err := dec.Decode(&dst)
+	if err != nil {
+		var syntaxError *json.SyntaxError
+		var unmarshalTypeError *json.UnmarshalTypeError
+
+		switch {
+		case errors.As(err, &syntaxError):
+			msg := fmt.Sprintf("Request body contains badly-formed JSON (at position %d)", syntaxError.Offset)
+			return &malformedRequest{status: http.StatusBadRequest, message: msg}
+
+		case errors.Is(err, io.ErrUnexpectedEOF):
+			msg := fmt.Sprintf("Request body contains badly-formed JSON")
+			return &malformedRequest{status: http.StatusBadRequest, message: msg}
+
+		case errors.As(err, &unmarshalTypeError):
+			msg := fmt.Sprintf("Request body contains an invalid value for the %q field (at position %d)", unmarshalTypeError.Field, unmarshalTypeError.Offset)
+			return &malformedRequest{status: http.StatusBadRequest, message: msg}
+
+		case errors.Is(err, io.EOF):
+			msg := "Request body must not be empty"
+			return &malformedRequest{status: http.StatusBadRequest, message: msg}
+
+		case err.Error() == "http: request body too large":
+			msg := "Request body must not be larger than 1MB"
+			return &malformedRequest{status: http.StatusRequestEntityTooLarge, message: msg}
+
+		default:
+			return err
+		}
+	}
+
+	err = dec.Decode(&struct{}{})
+	if err != io.EOF {
+		msg := "Request body must only contain a single JSON object"
+		return &malformedRequest{status: http.StatusBadRequest, message: msg}
+	}
+
+	return nil
+}
+
+func fileExist(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }

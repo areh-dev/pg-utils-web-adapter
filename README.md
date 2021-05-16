@@ -20,13 +20,15 @@ without additional parameters
 - `PG_USER` - (**required**) username 
 - `PG_PASS` - user password. Can be empty assuming that the PostgreSQL server is configured to connect without a password
 
+`USE_DIR_STRUCTURE` - ("TRUE") Use directories structure for backups: `/backups/server_name/db_name/backup_file` 
+
 ## API usage
 
 - `/status` GET request returns OK if service is up and running
-- `/backup` GET
-- `/backup-db` GET request with full connection settings
-- `/restore` GET
-- `/restore-db` GET request with full connection settings
+- `/backup` GET for environment config \ POST with JSON config in request
+~~- `/backup-db` GET request with full connection settings~~
+- `/restore` GET for environment config \ POST with JSON config in request
+~~- `/restore-db` GET request with full connection settings~~
 
 ## Usage
 
@@ -42,6 +44,9 @@ services:
   pg-util:
     image: "pg-utils-web-adapter:latest"
     container_name: "pg-util-adapter"
+    
+    volume - /backups
+    
     restart: always
     environment:
       - PG_HOST=pgdb-server
