@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+// todo: Check log output (for each error response)
+// todo: write tests
+// todo: do refactoring
+// todo: public on GitHub
+
 // Required external utils
 const (
 	pSql       = "psql"
