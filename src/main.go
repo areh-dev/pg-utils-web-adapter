@@ -298,7 +298,7 @@ func isDbExist(pgConnection *pgConnection) (bool, error) {
 		"--no-password",
 		"--tuples-only",
 		"--no-align",
-		"-c", fmt.Sprintf("\"SELECT 1 FROM pg_database WHERE datname='%s'\"", pgConnection.Db),
+		"-c", fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname='%s'", pgConnection.Db),
 	}
 
 	res, out := executeWithOutput(pSql, args, pgConnection.Pass, true, false)
