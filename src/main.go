@@ -216,17 +216,39 @@ func restoreHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// todo: next steps to restore:
-	/*
-		1. Check is DB exist
-		2. Clear \ Creat DB
-		3. Restore data from file
-	*/
+	var dbExist bool
+	dbExist, err = isDbExist(pgConnection)
+	if err != nil {
 
-	//dbExist, err =
-	log.Println(pgConnection.Host)
+	}
 
-	writeResponse(w, http.StatusOK, actionResponse{Action: actionName, Status: statusSkipped})
+	if dbExist {
+		// Clear DB
+	} else {
+		// Creat DB
+	}
+
+	// Restore data from file
+
+	writeResponse(w, http.StatusOK, actionResponse{Action: actionName, Status: "__________statusSkipped__________", Message: "_______________RESULT_______________"})
+}
+
+func isDbExist (pgConnection *pgConnection) (bool, error) {
+	args := []string{
+		"-h", pgConnection.Host,
+		"-p", pgConnection.Port,
+		"-U", pgConnection.User,
+		"-tA",
+		"-w",
+		"-c", fmt.Sprintf("\"SELECT 1 FROM pg_database WHERE datname='%s'\"", pgConnection.Db),
+	}
+
+	res, out := executeWithOutput(pSql, args, pgConnection.Pass, true, false)
+	if !res {
+		return false, errors.New("psql execution error")
+	}
+
+	return strings.TrimSpace(out) == "1", nil
 }
 
 func returnExecutionResult(w http.ResponseWriter, actionName, app string, args []string, pgPassword string, omitSuccessfulOutput bool, fileName string) {
