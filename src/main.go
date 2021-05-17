@@ -231,16 +231,20 @@ func restoreHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dbExist {
-		err = restoreDb(pgConnection, file, true)
-	} else {
-		err = createDb(pgConnection)
+		err = dropDb(pgConnection)
 		if err != nil {
 			writeInternalServerErrorResponse(w, actionName, err)
 			return
 		}
-		err = restoreDb(pgConnection, file, false)
 	}
 
+	err = createDb(pgConnection)
+	if err != nil {
+		writeInternalServerErrorResponse(w, actionName, err)
+		return
+	}
+
+	err = restoreDb(pgConnection, file)
 	if err != nil {
 		writeInternalServerErrorResponse(w, actionName, err)
 		return
@@ -249,19 +253,33 @@ func restoreHandler(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, http.StatusOK, actionResponse{Action: actionName, Status: statusOk})
 }
 
-func restoreDb(pgConnection *pgConnection, dumpFile string, cleanDb bool) error {
+func dropDb(pgConnection *pgConnection) error {
 	args := []string{
 		"-h", pgConnection.Host,
 		"-p", pgConnection.Port,
 		"-U", pgConnection.User,
 		"--no-password",
+		"-c", fmt.Sprintf("drop database %s", pgConnection.Db),
 	}
 
-	if cleanDb {
-		args = append(args, "--clean")
+	res, out := executeWithOutput(pSql, args, pgConnection.Pass, true, true)
+	if !res {
+		return errors.New(fmt.Sprintf("psql drop DB execution error\n%s", out))
 	}
 
-	args = append(args, "-d", pgConnection.Db, dumpFile)
+	return nil
+}
+
+func restoreDb(pgConnection *pgConnection, dumpFile string) error {
+	args := []string{
+		"-h", pgConnection.Host,
+		"-p", pgConnection.Port,
+		"-U", pgConnection.User,
+		"--no-password",
+		"--jobs", "4",
+		"-d", pgConnection.Db,
+		dumpFile,
+	}
 
 	res, out := executeWithOutput(pgRestore, args, pgConnection.Pass, true, true)
 	if !res {
