@@ -211,7 +211,8 @@ func restoreHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fileExist, err := fileExist(fmt.Sprintf("%s%s", baseBackupsPath, strings.TrimLeft(file, "/.")))
+	file = fmt.Sprintf("%s%s", baseBackupsPath, strings.TrimLeft(file, "/."))
+	fileExist, err := fileExist(file)
 	if err != nil || !fileExist {
 		writeResponse(w, http.StatusBadRequest, actionResponse{Action: actionName, Status: statusError, Message: messageBackupFileNotFound})
 		return
