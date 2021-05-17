@@ -278,6 +278,7 @@ func restoreDb(pgConnection *pgConnection, dumpFile string) error {
 		"-U", pgConnection.User,
 		"--no-password",
 		"--jobs", "4",
+		"-v",
 		"-d", pgConnection.Db,
 		dumpFile,
 	}
