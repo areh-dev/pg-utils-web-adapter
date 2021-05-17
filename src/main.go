@@ -26,6 +26,8 @@ const (
 	pgCreateDb = "createdb"
 )
 
+const baseBackupsPath = "/backups/"
+
 // Messages
 const (
 	messageEnvNotSet          = "Environment variables not set"
@@ -38,8 +40,8 @@ const (
 
 // Status values
 const (
-	statusOk      = "ok"
-	statusError   = "error"
+	statusOk    = "ok"
+	statusError = "error"
 )
 
 type malformedRequest struct {
@@ -132,7 +134,7 @@ func backupHandler(w http.ResponseWriter, r *http.Request) {
 
 	var fileName string
 	if useDirStructure {
-		path := fmt.Sprintf("/backups/%s/%s", pgConnection.Host, pgConnection.Db)
+		path := fmt.Sprintf("%s%s/%s", baseBackupsPath, pgConnection.Host, pgConnection.Db)
 		err := os.MkdirAll(path, 0666)
 		if err != nil {
 			log.Printf("[ERR] Can't create directory: %s, Error: %s", path, err.Error())
@@ -142,7 +144,7 @@ func backupHandler(w http.ResponseWriter, r *http.Request) {
 
 		fileName = fmt.Sprintf("%s/%s.dump", path, time.Now().Format("20060102_150405"))
 	} else {
-		fileName = fmt.Sprintf("/backups/%s_%s_%s.dump", pgConnection.Host, pgConnection.Db, time.Now().Format("20060102_150405"))
+		fileName = fmt.Sprintf("%s%s_%s_%s.dump", baseBackupsPath, pgConnection.Host, pgConnection.Db, time.Now().Format("20060102_150405"))
 	}
 
 	args := []string{
@@ -209,7 +211,7 @@ func restoreHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fileExist, err := fileExist(fmt.Sprintf("/backups/%s", strings.TrimLeft(file, "/.")))
+	fileExist, err := fileExist(fmt.Sprintf("%s%s", baseBackupsPath, strings.TrimLeft(file, "/.")))
 	if err != nil || !fileExist {
 		writeResponse(w, http.StatusBadRequest, actionResponse{Action: actionName, Status: statusError, Message: messageBackupFileNotFound})
 		return
@@ -316,7 +318,7 @@ func returnExecutionResult(w http.ResponseWriter, actionName, app string, args [
 	if res {
 		status = statusOk
 		httpStatus = http.StatusOK
-		resultFile = fileName
+		resultFile = strings.TrimPrefix(fileName, baseBackupsPath)
 	} else if fileName != "" {
 		_ = os.Remove(fileName)
 	}
