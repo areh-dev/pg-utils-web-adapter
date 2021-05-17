@@ -35,7 +35,6 @@ const (
 const (
 	statusOk      = "ok"
 	statusError   = "error"
-	statusSkipped = "skipped"
 )
 
 type malformedRequest struct {
@@ -146,7 +145,7 @@ func backupHandler(w http.ResponseWriter, r *http.Request) {
 		"-p", pgConnection.Port,
 		"-U", pgConnection.User,
 		"-Fc",
-		"-w",
+		"--no-password",
 		"-v",
 		pgConnection.Db,
 		"-f", fileName,
@@ -168,7 +167,7 @@ func GetConnectionConfig(w http.ResponseWriter, r *http.Request, actionName stri
 		pgConnection = *pgEnvSet
 
 	case http.MethodPost: // Read configuration from post request
-		err := decodeJSONBody(w, r, &pgConnection)
+		err := decodeJsonBody(w, r, &pgConnection)
 		if err != nil {
 			var mr *malformedRequest
 			if errors.As(err, &mr) {
@@ -219,33 +218,85 @@ func restoreHandler(w http.ResponseWriter, r *http.Request) {
 	var dbExist bool
 	dbExist, err = isDbExist(pgConnection)
 	if err != nil {
-
+		writeInternalServerErrorResponse(w, actionName, err)
+		return
 	}
 
 	if dbExist {
-		// Clear DB
+		err = restoreDb(pgConnection, file, true)
 	} else {
-		// Creat DB
+		err = createDb(pgConnection)
+		if err != nil {
+			writeInternalServerErrorResponse(w, actionName, err)
+			return
+		}
+		err = restoreDb(pgConnection, file, false)
 	}
 
-	// Restore data from file
+	if err != nil {
+		writeInternalServerErrorResponse(w, actionName, err)
+		return
+	}
 
-	writeResponse(w, http.StatusOK, actionResponse{Action: actionName, Status: "__________statusSkipped__________", Message: "_______________RESULT_______________"})
+	writeResponse(w, http.StatusOK, actionResponse{Action: actionName, Status: statusOk})
 }
 
-func isDbExist (pgConnection *pgConnection) (bool, error) {
+func restoreDb(pgConnection *pgConnection, dumpFile string, cleanDb bool) error {
 	args := []string{
 		"-h", pgConnection.Host,
 		"-p", pgConnection.Port,
 		"-U", pgConnection.User,
-		"-tA",
-		"-w",
+		"--no-password",
+	}
+
+	if cleanDb {
+		args = append(args, "--clean")
+	}
+
+	args = append(args, "-d", pgConnection.Db, dumpFile)
+
+	res, out := executeWithOutput(pgRestore, args, pgConnection.Pass, true, true)
+	if !res {
+		return errors.New(fmt.Sprintf("restoreDb execution error\n%s", out))
+	}
+
+	return nil
+}
+
+func createDb(pgConnection *pgConnection) error {
+	args := []string{
+		"-h", pgConnection.Host,
+		"-p", pgConnection.Port,
+		"-U", pgConnection.User,
+		"--no-password",
+		"--echo",
+		"--template=template0",
+		"--encoding=UTF8",
+		pgConnection.Db,
+	}
+
+	res, out := executeWithOutput(pgCreateDb, args, pgConnection.Pass, true, true)
+	if !res {
+		return errors.New(fmt.Sprintf("createdb execution error\n%s", out))
+	}
+
+	return nil
+}
+
+func isDbExist(pgConnection *pgConnection) (bool, error) {
+	args := []string{
+		"-h", pgConnection.Host,
+		"-p", pgConnection.Port,
+		"-U", pgConnection.User,
+		"--no-password",
+		"--tuples-only",
+		"--no-align",
 		"-c", fmt.Sprintf("\"SELECT 1 FROM pg_database WHERE datname='%s'\"", pgConnection.Db),
 	}
 
 	res, out := executeWithOutput(pSql, args, pgConnection.Pass, true, false)
 	if !res {
-		return false, errors.New("psql execution error")
+		return false, errors.New(fmt.Sprintf("psql check DB exist execution error\n%s", out))
 	}
 
 	return strings.TrimSpace(out) == "1", nil
@@ -266,6 +317,11 @@ func returnExecutionResult(w http.ResponseWriter, actionName, app string, args [
 	}
 
 	writeResponse(w, httpStatus, actionResponse{Action: actionName, Status: status, Message: out, File: resultFile})
+}
+
+func writeInternalServerErrorResponse(w http.ResponseWriter, actionName string, err error) {
+	writeResponse(w, http.StatusInternalServerError,
+		actionResponse{Action: actionName, Status: statusError, Message: fmt.Sprintf("%v", err)})
 }
 
 func writeResponse(w http.ResponseWriter, responseStatus int, responseData actionResponse) {
@@ -318,7 +374,7 @@ func executeWithOutput(app string, args []string, pgPassword string, printOutput
 	return true, string(out)
 }
 
-func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst interface{}) error {
+func decodeJsonBody(w http.ResponseWriter, r *http.Request, dst interface{}) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 
 	dec := json.NewDecoder(r.Body)
