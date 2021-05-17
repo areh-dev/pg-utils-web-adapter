@@ -15,7 +15,8 @@ import (
 
 // todo: Check log output (for each error response)
 // todo: write tests
-// todo: do refactoring
+// todo: do refactoring (use functions in some case as parameters?)
+// todo: add some config options (backup format? if yes, should restore with different tools: pg_restore, or psql for SQL)
 // todo: public on GitHub
 
 // Required external utils
