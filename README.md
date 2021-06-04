@@ -1,3 +1,5 @@
+# Warning: pre-alpha version!
+
 # pg-utils-web-adapter
 
 Simple web-api adapter to run pg_dump and pg_restore in docker container
